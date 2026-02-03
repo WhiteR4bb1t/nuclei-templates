@@ -1,0 +1,242 @@
+id: query-sqli-detection
+
+info:
+  name: Query Parameter SQLi Detector
+  author: NeoPrime
+  severity: info
+  description: Detects SQL injection
+  tags: sqli,fuzz
+
+http:
+  - payloads:
+      sqli:
+        low:
+          - "'"
+        
+        medium:
+          - "''"
+          - "\""
+          - "' OR 1=1--"
+          - "' --"
+        
+        high:
+          - "\\'"
+          - "%27"
+          - "' AND pg_sleep(5))--"
+          - "'; WAITFOR DELAY '0:0:5'--"
+          - "\" AND SLEEP(5)--"
+          - "' WHERE 1=1 AND SLEEP(5)--"
+          - "1' AND SLEEP(5)#"
+          - "admin' OR '1'='1'--"
+
+    fuzzing:
+      - part: query
+        type: replace
+        mode: multiple
+        fuzz: 
+        - "{{sqli}}"
+    
+    matchers-condition: or
+    matchers:
+      # ==========================================
+      # ERROR-BASED DETECTION
+      # ==========================================
+      
+      # MySQL Errors (comprehensive)
+      - type: regex
+        name: mysql-error
+        part: body
+        regex:
+          - "SQL syntax.*MySQL"
+          - "Warning.*mysql_.*"
+          - "MySQLSyntaxErrorException"
+          - "valid MySQL result"
+          - "check the manual that corresponds to your MySQL"
+          - "mysql_fetch"
+          - "mysql_num_rows"
+          - "mysqli"
+          - "Unknown column.*in.*field list"
+          - "Operand should contain.*column"
+      
+      # PostgreSQL Errors (comprehensive)
+      - type: regex
+        name: postgresql-error
+        part: body
+        regex:
+          - "PostgreSQL.*ERROR"
+          - "Warning.*\\Wpg_.*"
+          - "valid PostgreSQL result"
+          - "Npgsql\\."
+          - "PG::SyntaxError:"
+          - "unterminated quoted string"
+          - "pg_query"
+          - "pg_exec"
+      
+      # MSSQL Errors (comprehensive)
+      - type: regex
+        name: mssql-error
+        part: body
+        regex:
+          - "Driver.*SQL[\\-\\_\\ ]*Server"
+          - "OLE DB.*SQL Server"
+          - "\\bSQL Server.*Driver"
+          - "Warning.*mssql_.*"
+          - "System\\.Data\\.SqlClient\\.SqlException"
+          - "Unclosed quotation mark"
+          - "Microsoft SQL Native Client error"
+          - "ODBC SQL Server Driver"
+      
+      # Oracle Errors (comprehensive)
+      - type: regex
+        name: oracle-error
+        part: body
+        regex:
+          - "\\bORA-[0-9][0-9][0-9][0-9]"
+          - "Oracle error"
+          - "Oracle.*Driver"
+          - "Warning.*\\Woci_.*"
+          - "Warning.*\\Wora_.*"
+          - "quoted string not properly terminated"
+      
+      # SQLite Errors
+      - type: regex
+        name: sqlite-error
+        part: body
+        regex:
+          - "SQLite.*error"
+          - "sqlite3\\.OperationalError"
+          - "SQLite3::SQLException"
+          - "unrecognized token"
+      
+      # Generic SQL Errors
+      - type: word
+        name: generic-sql-error
+        part: body
+        words:
+          - "SQL syntax error"
+          - "syntax error"
+          - "mysql_fetch_array"
+          - "pg_query"
+          - "database error"
+          - "SQL command not properly ended"
+          - "unexpected end of SQL"
+        condition: or
+      
+      # ==========================================
+      # TIME-BASED DETECTION
+      # ==========================================
+      
+      # 5+ seconds delay
+      - type: dsl
+        name: time-based-5sec
+        dsl:
+          - "duration >= 5000"
+      
+      # Significantly longer than baseline
+      - type: dsl
+        name: time-based-relative
+        dsl:
+          - "duration > duration_1 + 4000"
+
+      # ==========================================
+      # RESPONSE ANOMALY DETECTION
+      # ==========================================
+      
+      # Response significantly larger (Boolean-Based)
+      - type: dsl
+        name: response-much-larger
+        dsl:
+          - "len(body) > len(body_1) * 2"
+          - "len(body) > len(body_1) + 5000"
+        condition: or
+      
+      # Response significantly smaller
+      - type: dsl
+        name: response-much-smaller
+        dsl:
+          - "len(body_1) > len(body) + 5000"
+          - "len(body) < 100 && len(body_1) > 1000"
+          - "len(body) < 10 && status_code == 200"
+        condition: or
+      
+      # Response completely empty
+      - type: dsl
+        name: response-empty
+        dsl:
+          - "len(body) == 0 && status_code == 200"
+      
+      # ==========================================
+      # STATUS CODE ANOMALIES
+      # ==========================================
+      
+      # Error status codes
+      - type: dsl
+        name: error-status-codes
+        dsl:
+          - "status_code == 500"
+          - "status_code == 503"
+          - "status_code == 502"
+          - "status_code == 504"
+        condition: or
+      
+      # Status code changed
+      - type: dsl
+        name: status-changed
+        dsl:
+          - "status_code != status_code_1"
+      
+      # From success to error
+      - type: dsl
+        name: success-to-error
+        dsl:
+          - "status_code >= 500 && status_code_1 == 200"
+      
+      # ==========================================
+      # CONTENT-TYPE ANOMALIES
+      # ==========================================
+      
+      # Content-Type changed
+      - type: dsl
+        name: content-type-changed
+        dsl:
+          - "content_type != content_type_1"
+      
+      # ==========================================
+      # BLIND SQLI INDICATORS
+      # ==========================================
+            
+      # Database version info leaked
+      - type: regex
+        name: db-version-leak
+        part: body
+        regex:
+          - "MySQL.*[0-9]+\\.[0-9]+"
+          - "PostgreSQL.*[0-9]+\\.[0-9]+"
+          - "Microsoft SQL Server.*[0-9]+"
+    
+    extractors:
+      # Extract ALL the things!
+      - type: kval
+        name: vulnerable-param
+        part: request
+        kval:
+          - query
+      
+      # Extract error messages
+      - type: regex
+        name: error-message
+        part: body
+        group: 0
+        regex:
+          - "(?i)(SQL|MySQL|PostgreSQL|Oracle|MSSQL).*error[^<]{0,200}"
+          - "(?i)ORA-[0-9]{5}:.*"
+      
+      # Extract query fragments (if leaked)
+      - type: regex
+        name: query-leak
+        part: body
+        group: 0
+        regex:
+          - "(?i)SELECT.*FROM.*"
+          - "(?i)INSERT INTO.*"
+          - "(?i)UPDATE.*SET.*"

@@ -1,0 +1,55 @@
+id: query-ssti-fuzz
+
+info:
+  name: Server-Side Template Injection - Query Parameter Fuzzing
+  author: NeoPrime
+  severity: low
+  description: Detects potential SSTI vulnerabilities by testing mathematical expressions in query parameters
+
+variables:
+  first: "{{rand_int(10000, 99999)}}"
+  second: "{{rand_int(10000, 99999)}}"
+  result: "{{to_number(first)*to_number(second)}}"
+
+http:
+  - payloads:
+      reflection:
+        low:
+          - '{{concat("{{", first, "*", second, "}}")}}'
+        
+        medium:
+          - '{{concat("{{", first, "*", second, "}}")}}'
+          - '{{concat("${", first, "*", second, "}")}}'
+          - '{{concat("<%= ", first, "*", second, " %>")}}'
+        
+        high:
+          - '{{concat("{% print(", first, "*", second, ") %}")}}'
+          - '{{concat("#set($x=", first, "*", second, ")$x")}}'
+          - '{{concat("{", first, "*", second, "}")}}'
+          - '{{concat("[[", first, "*", second, "]]")}}'
+
+    fuzzing:
+      - part: query
+        type: replace
+        mode: multiple
+        fuzz:
+          - "{{reflection}}"
+
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "{{result}}"
+        condition: and
+
+      - type: status
+        status:
+          - 200
+
+    extractors:
+      - type: regex
+        part: body
+        regex:
+          - '{{result}}'
+        internal: true
