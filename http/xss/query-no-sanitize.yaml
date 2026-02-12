@@ -1,0 +1,56 @@
+id: reflection-sanitization-check
+
+info:
+  name: Reflection Sanitization Check
+  author: NeoPrime
+  severity: info
+  description: Detects which special characters are not properly sanitized in reflected parameters
+  tags: reflection
+
+variables:
+  marker: "{{rand_text_alphanumeric(8)}}"
+
+http:
+  - payloads:
+      sanitize_test:
+        - "{{marker}}\""
+        - "{{marker}}>"
+        - "{{marker}}'"
+        - "{{marker}}{"
+
+    fuzzing:
+      - part: query
+        type: replace
+        mode: multiple
+        fuzz:
+          - "{{sanitize_test}}"
+
+
+    matchers-condition: or
+    matchers:
+
+      # DOUBLE QUOTE "
+      - type: word
+        name: unsanitized-double-quote
+        part: body
+        words:
+          - "{{marker}}\""
+
+      # SINGLE QUOTE '
+      - type: word
+        name: unsanitized-single-quote
+        part: body
+        words:
+          - "{{marker}}'"
+      # GREATER THAN >
+      - type: word
+        name: unsanitized-greater-than
+        part: body
+        words:
+          - "{{marker}}>"
+      # curly bracket  {
+      - type: word
+        name: unsanitized-curly-bracket
+        part: body
+        words:
+          - "{{marker}}{"
